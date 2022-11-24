@@ -16,7 +16,7 @@ log = core.getLogger()
 FLOW_TIMEOUT = 2
 
 class SimpleLoadBalancer(object):
-    def _init_(self, service_ip, server_ips = []): #initialize
+    def __init__(self, service_ip, server_ips = []): #initialize
         core.openflow.addListeners(self)
         self.lb_ip = service_ip
         self.server_ips = server_ips
@@ -57,20 +57,15 @@ class SimpleLoadBalancer(object):
     #update load balancing mapping
     def update_lb_mapping(self, client_ip): 
         ### write your code here ###
-        # update the load-balance mapping here
-        # 1. IF no flow for client_ip, THEN randomly choose a server from existing servers
-        # 2. IF the flow for client_ip has expired, THEN randomly choose a server from existing servers
-        # 3. IF the flow for client_ip has not expired, THEN update the latest time for the flow
+        time_updated = time.time()
+        rand_index = random.randint(0, len(self.server_ips)-1)
+        random_IP = self.server_ips[rand_index]
         if self.flow_table.get(client_ip, (None, None)) == (None, None):
-            self.flow_table[client_ip] = (random.choice(self.server_ips),time.time())
-        elif abs(self.flow_table[client_ip][1] - time.time()) <= FLOW_TIMEOUT:
-            self.flow_table[client_ip] = (self.flow_table[client_ip][0],time.time())
+            self.flow_table[client_ip] = (random_IP,time_updated)
+        elif abs(self.flow_table[client_ip][1] - time_updated) <= FLOW_TIMEOUT:
+            self.flow_table[client_ip] = (self.flow_table[client_ip][0],time_updated)
         else:
-            self.flow_table[client_ip] = (random.choice(self.server_ips),time.time())
-        # elif client_ip in self.flow_table.keys():
-        #    self.flow_table(client_ip) = (self.flow_table[client_ip[0], time.time()])
-        # else:
-        #    self.flow_table(client_ip) = (self.server_ips[0], time.time()])
+            self.flow_table[client_ip] = (random_IP,time_updated)
         log.info("called function: update_lb_mapping")
         pass
         ### your code ends here ###
@@ -88,9 +83,9 @@ class SimpleLoadBalancer(object):
         # make changes that you see proper
         if (self.client_arp_table.get(client_ip, (None,None)) != (client_mac, inport)):
             self.client_arp_table[client_ip] = client_mac, inport
-            log.info("Server %s (MAC %s) is connected at port %s." % (client_ip, client_mac, inport))
+            log.info("The server %s (MAC %s) is connected at port %s." % (client_ip, client_mac, inport))
         log.info("called function: update_client_arp_table")
-        pass 
+        pass
         ### your code ends here ###
 
     # Answer to ARP requests from the servers searching the MAC addresses of clients
@@ -107,21 +102,20 @@ class SimpleLoadBalancer(object):
         r.prototype = r.PROTO_TYPE_IP
         r.opcode = r.REPLY
         r.hwdst = ETHER_BROADCAST
-        r.protodst = server_ip          # the destination IP in arp reply 
-        r.hwsrc = self.lb_mac           # the source MAC in arp reply
-        r.protosrc = client_ip         # the source IP in arp reply
+        r.protodst = server_ip           
+        r.hwsrc = self.lb_mac           
+        r.protosrc = client_ip        
         e = ethernet(type=ethernet.ARP_TYPE, src=self.lb_mac,
                      dst=ETHER_BROADCAST)
         e.set_payload(r)
 
-        # construct and send the OpenFlow message
         msg = of.ofp_packet_out()
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
         msg.data = e.pack()
         msg.in_port = of.OFPP_NONE
         self.connection.send(msg)
         log.info("called function: send_proxied_arp_reply_to_server")
-        pass 
+        pass
         ### your code ends here ###
     
     # reply to arp requests from clients
@@ -152,26 +146,24 @@ class SimpleLoadBalancer(object):
         ### write your code here ###
         # code is similar to forward_server_to_client
         # make changes that you see proper
-        mac,port = self.client_arp_table.get(client_ip) 
-        server_ip = self.flow_table[client_ip][0]
+        mac,port = self.client_arp_table.get(client_ip)
+        server_ip, _ = self.flow_table[client_ip]
         server_mac, server_port = self.server_arp_table.get(server_ip)
-        
+
         actions = []
-        # set the correct mac and port
         actions.append(of.ofp_action_dl_addr.set_dst(server_mac))
         actions.append(of.ofp_action_nw_addr.set_dst(server_ip))
         actions.append(of.ofp_action_output(port = server_port))
-        
-        # send the message
+
         msg = of.ofp_packet_out()
         msg.actions = actions
         msg.data = event.ofp
         msg.in_port = of.OFPP_NONE
 
         self.connection.send(msg)
-        log.info("Packet from server %s forwarded to client %s." % (server_ip, client_ip))
+        log.info("Packet from the Client %s forwarded to the Server %s." % (client_ip, server_ip))
         log.info("called function: forward_client_to_server")
-        pass 
+        pass
         ### your code ends here ###
     
     # Direct flows from the servers to the clients. 
@@ -183,10 +175,10 @@ class SimpleLoadBalancer(object):
         actions = []
         # set the correct mac and port
         actions.append(of.ofp_action_dl_addr.set_dst(mac))
-        actions.append(of.ofp_action_output(port = port))
         # from the client's perspective, the packet should be from lb IP and MAC
         actions.append(of.ofp_action_dl_addr.set_src(self.lb_mac))
         actions.append(of.ofp_action_nw_addr.set_src(self.lb_ip))
+        actions.append(of.ofp_action_output(port = port))
         
         # send the message
         msg = of.ofp_packet_out()
@@ -196,8 +188,6 @@ class SimpleLoadBalancer(object):
 
         self.connection.send(msg)
         log.info("Packet from server %s forwarded to client %s." % (server_ip, client_ip))
-
-    
 
     def _handle_PacketIn(self, event):
         packet = event.parsed
